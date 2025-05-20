@@ -1,7 +1,7 @@
 // @ExecutionModes({ON_SINGLE_NODE})
 
 /* 
- * Freeplane Types Creator
+ * Freeplane Dynamic Types Creator
  *
  * v0.8.2
  * 
@@ -12,7 +12,7 @@
  *
  * ---------
  *
- * Freeplane Types Creator: Freeplane utility for creating dynamic node templates and forms.
+ * Freeplane Dynamic Types Creator: Freeplane utility for creating dynamic node templates and forms.
  *
  *
  * Copyright (C) 2024 The Authors
