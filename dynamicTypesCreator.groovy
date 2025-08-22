@@ -3,7 +3,7 @@
 /* 
  * Freeplane Dynamic Types Creator
  *
- * v0.8.2
+ * v0.8.3
  * 
  * Info & Discussion: https://github.com/freeplane/freeplane/discussions/2365
  *
@@ -15,7 +15,7 @@
  * Freeplane Dynamic Types Creator: Freeplane utility for creating dynamic node templates and forms.
  *
  *
- * Copyright (C) 2024 The Authors
+ * Copyright (C) 2025 The Authors
  *
  * This program is free software: you can redistribute it and/or modify it under the terms of the
  * GNU General Public License as published by the Free Software Foundation, either version 3 of the
@@ -170,7 +170,7 @@ if (templateVars.ok && templateVars.type?.selectedItem) {
 
     // Validating Template items have unique names
     if (originalFormsItemsNodes.size() != originalFormsItemsNodes.collect{ it.plainText }.toSet().size()) {
-        JOptionPane.showMessageDialog(ui.frame, "Invalid template: there are Form Items with the same name (core text). Form Items must have unique names.", "Template Picker Error", JOptionPane.ERROR_MESSAGE)
+        JOptionPane.showMessageDialog(ui.frame, "Invalid template '${templateNode.plainText}': there are Items (nodes) in the selected Template with the same name (core text). Items (nodes) must have unique names.", "Template Picker Error", JOptionPane.ERROR_MESSAGE)
         return
     }
     
@@ -225,7 +225,13 @@ if (templateVars.ok && templateVars.type?.selectedItem) {
                         // Check for comboType attribute
                         String comboTypeAttr = itemNode.attributes.get("comboType")?.toLowerCase()?.trim()
                         boolean isMultiple = (itemNode.attributes.get("multiple")?.toString()?.toLowerCase() == "true")
+                        
                         String defaultText = itemNode.attributes.get("defaultText")?.trim()
+                        def destinationType = itemNode.attributes.get("destinationType")?.toLowerCase()?.trim() ?: "attribute"
+                        
+                        if (defaultText && destinationType in ["core", "childnode", "child"]) {
+                            label(text: '(node title) ' ) 
+                        }
 
                         if ((comboTypeAttr == "open" || comboTypeAttr == "closed") && isMultiple) {
                             button(
@@ -422,8 +428,8 @@ if (templateVars.ok && templateVars.type?.selectedItem) {
                     break
                 case ["childnode", "child"]:
                     if (value != null) {
-                        String headerValue = itemNode.attributes.get("header").trim()
-                        headerValue = processPlaceholders(headerValue, Copy)
+                        String headerValue = itemNode.attributes.get("header")?.trim()
+                        headerValue = headerValue? processPlaceholders(headerValue, Copy) : null
                         def existingHeader =  headerValue? Copy.children.find{ it.plainText.toLowerCase().equals( headerValue.toLowerCase()) }.find() : null
                         def parentNode = headerValue? (existingHeader? existingHeader : Copy.createChild(headerValue)) : Copy
                         
