@@ -3,7 +3,7 @@
 /* 
  * Freeplane Dynamic Types Creator
  *
- * v0.8.3
+ * v0.8.4
  * 
  * Info & Discussion: https://github.com/freeplane/freeplane/discussions/2365
  *
@@ -35,6 +35,9 @@ import groovy.swing.SwingBuilder
 import java.awt.Color
 import java.awt.FlowLayout as FL
 import java.awt.event.FocusListener
+import java.awt.event.WindowAdapter
+import java.awt.event.WindowEvent
+import java.awt.Window
 import javax.swing.BoxLayout as BXL
 import javax.swing.JFrame
 import javax.swing.JOptionPane
@@ -193,7 +196,54 @@ if (templateVars.ok && templateVars.type?.selectedItem) {
     templateNode.attributes.getNames().each{
         if (it.trim().startsWith('*')) Copy[it.trim().substring(1)] = processPlaceholders(templateNode.attributes.get(it) as String, Copy)
     }
-   
+    
+    // Copy and process the Template node's direct "default" children/branch (Note: "default" children here means
+    // siblings of the "Template Settings" node. Branch here refers to all the descendants of such "default" children nodes.)
+    // We take into account the potential merging if "default" children with "headers" defined in "Template Settings".
+    templateNode.children.findAll { !it.plainText.startsWith(SETTINGS_NODE_PREFIX) }.each{ defaultChild ->
+        // Copy the "default" child node and its entire branch
+        def childCopy = Copy.appendBranch(defaultChild)
+        
+        // Resolve macros in childCopy and its descendants
+        childCopy.findAll().each{ descendant ->
+            // We leave text of elements with potential rich text (i.e core, details, and note) untouched if it does not contain Macro syntax ("{{" and "}}")
+            // so that it won't lose formatting unnecessarily
+            
+            descendant.text = descendant.plainText.contains("{{") && descendant.plainText.contains("}}") ?
+                                processPlaceholders(descendant.plainText, Copy) : descendant.text
+            descendant.details = descendant.details && descendant.details.plain.contains("{{") && descendant.details.plain.contains("}}") ?
+                                processPlaceholders(descendant.details.plain, Copy) : descendant.detailsText
+            descendant.note = descendant.note && descendant.note.plain.contains("{{") && descendant.note.plain.contains("}}") ?
+                                processPlaceholders(descendant.note.plain, Copy) : descendant.noteText
+
+            // Attributes: macros will be evaluated in all attribute values, except any "node script" attributes (i.e those named "scriptN", N= 1, 2, 3...)
+            descendant.attributes.getNames().findAll{ name -> !name.matches("script\\d") }.each{ it -> 
+                descendant[it] = processPlaceholders(descendant.attributes.get(it) as String, Copy) 
+            }
+            
+            // Tags
+            descendant.tags.categorizedTags.each{ it ->
+               if ( it.contains("{{") && it.contains("}}") ) {
+                    descendant.tags.add(processPlaceholders(it as String, Copy))
+                    descendant.tags.remove(it)
+               }
+            }                                
+        }
+        
+        // "Merge" header node whose text equals the text of the "default" child
+        def existingHeaderSettings = headerNodeSettings[defaultChild.plainText.trim().toLowerCase()]
+        if (existingHeaderSettings != null) {
+            existingHeaderSettings.attributes.getNames().findAll{ name -> name.trim().startsWith('*')}.each{ it ->
+                def attrName = it.trim().substring(1)
+                if (childCopy.attributes.get(attrName) != null) {
+                    JOptionPane.showMessageDialog(ui.frame, "WARNING: Conflict when merging header node and a 'default' child with the same text (${childCopy.plainText}).\nReason: both nodes contain the same attribute (${attrName}). One of the values will be ignored.", "WARNING: Conflict when merging header node and default child", JOptionPane.WARNING_MESSAGE)
+                } else {
+                    childCopy[attrName] = processPlaceholders(existingHeaderSettings.attributes.get(it) as String, Copy)
+                }
+            }
+        }
+    }
+    
     // Create the macros header, setting 'Copy' as their 'node' variable (i.e node = Copy)
     header = createHeader(Copy)
 
@@ -234,26 +284,41 @@ if (templateVars.ok && templateVars.type?.selectedItem) {
                         }
 
                         if ((comboTypeAttr == "open" || comboTypeAttr == "closed") && isMultiple) {
+                            def defaultSelection = itemNode.children.findAll{ 
+                                it.attributes.get("preselect")?.toLowerCase()?.trim() == "true"
+                            }.collect{ it.plainText.startsWith('&' + MASTERLIST_PREFIX) ?
+                                masterLists[it.plainText.substring(1)] :
+                                it.plainText
+                            }.flatten()?.minus(null)
+                                        
                             button(
-                                    text: "Select: ${itemNode.plainText}",
+                                    text: "Select... " + "(${defaultSelection.size()} selected)",
                                     id: "msButton_${index}",
-                                    actionPerformed: {
+                                    actionPerformed: { event ->
                                         def options = itemNode.children.collect {
                                             it.plainText.startsWith('&' + MASTERLIST_PREFIX) ? masterLists[it.plainText.substring(1)] : it.plainText
                                         }?.flatten()?.minus(null) ?: []
 
                                         boolean shouldAllowAdd = (comboTypeAttr == "open")
+                                        
+                                        def msLabelId = "msLabel_${index}"
+                                        
+                                        def currentSelectedValues = formVars."${msLabelId}".isEmpty()? [] : formVars."${msLabelId}".split(MULTISELECT_ITEMS_SEPARATOR).collect { it.trim() }
 
                                         List<String> selectedItemsResult = showMultiSelectDialog(
+                                                formDialog,
                                                 options,
-                                                shouldAllowAdd
+                                                shouldAllowAdd,
+                                                currentSelectedValues
                                         )
-                                        def msLabelId = "msLabel_${index}"
-                                        formVars."${msLabelId}" = selectedItems.join(MULTISELECT_ITEMS_SEPARATOR + " ")
+                                        
+                                        event.getSource().text = "Select... " + "(${selectedItemsResult.size()} selected)"
+                                        formVars."${msLabelId}" = selectedItemsResult.join(MULTISELECT_ITEMS_SEPARATOR + " ")
                                     }
                             )
+                            
                             label(text: "", id: "msLabel_${index}")
-                            formVars."msLabel_${index}" = ""
+                            formVars."msLabel_${index}" = defaultSelection.join(MULTISELECT_ITEMS_SEPARATOR + " ")
                         }
                         else if (comboTypeAttr == "open" || comboTypeAttr == "closed") {
                             // --- Create ComboBox ---
@@ -372,6 +437,7 @@ if (templateVars.ok && templateVars.type?.selectedItem) {
         } // End formDialog definition
 
         formDialog.pack()
+        formDialog.setLocationRelativeTo(ui.frame)
         formDialog.show()
         formOk = formVars.ok
 
@@ -508,7 +574,8 @@ if (templateVars.ok && templateVars.type?.selectedItem) {
     */
 
     if (!formOk){
-        c.statusInfo = "Node created, but form input cancelled/aborted"
+        Copy.delete()
+        c.statusInfo = "Form input cancelled/aborted"
     }
 
 } else if (templateVars.ok && !templateVars.type?.selectedItem) {
@@ -520,15 +587,17 @@ if (templateVars.ok && templateVars.type?.selectedItem) {
 
 ///////////// METHODS //////////////
 
-List<String> showMultiSelectDialog(List<String> listItems, boolean allowAddingItems = true) {
+List<String> showMultiSelectDialog(Window owner, List<String> listItems, boolean allowAddingItems = true, List<String> originalSelection) {
     def swing = new SwingBuilder()
-
+    def confirmChanges = false
+    def pressedCancel = false
     def checkBoxes = [:]
 
     def checkboxPanel = swing.panel {
         boxLayout(axis: BoxLayout.Y_AXIS)
         listItems.each { item ->
             checkBoxes[item] = checkBox(text: item)
+            if (originalSelection.contains(item)) checkBoxes[item].setSelected(true)
         }
     }
 
@@ -548,7 +617,7 @@ List<String> showMultiSelectDialog(List<String> listItems, boolean allowAddingIt
                 checkboxPanel.repaint()
                 newItemField.text = ""
             } else {
-                JOptionPane.showMessageDialog(ui.frame, "Invalid item, or item already exists!")
+                JOptionPane.showMessageDialog(owner, "Invalid item, or item already exists!")
             }
         })
     }
@@ -556,9 +625,10 @@ List<String> showMultiSelectDialog(List<String> listItems, boolean allowAddingIt
     def multiSelectDialog = swing.dialog(
             title: "Select Items",
             modal: true,
-            locationRelativeTo: ui.frame,
-            owner: ui.frame,
-            defaultCloseOperation: JFrame.DISPOSE_ON_CLOSE
+            locationRelativeTo: owner,
+            owner: owner,
+            undecorated: false,
+            defaultCloseOperation: JFrame.DO_NOTHING_ON_CLOSE
     ) {
         panel {
             boxLayout(axis: BoxLayout.Y_AXIS)
@@ -569,20 +639,41 @@ List<String> showMultiSelectDialog(List<String> listItems, boolean allowAddingIt
             panel(layout: new FL(FL.RIGHT)) {
                 button(text: "OK", actionPerformed: {
                     if (allowAddingItems && newItemField.text?.trim()) {
-                        JOptionPane.showMessageDialog(ui.frame, "You have entered a new item but haven't clicked Add. Please click the Add button and check the item to include it before closing.", "Warning", JOptionPane.WARNING_MESSAGE)
+                        JOptionPane.showMessageDialog(owner, "You have entered a new item but haven't clicked Add. Please click the Add button and check the item to include it before closing.", "Warning", JOptionPane.WARNING_MESSAGE)
                     } else {
+                        confirmChanges = true
                         dispose()
                     }
                 })
-                button(text: "Cancel", actionPerformed: { dispose() })
+                button(text: "Cancel", actionPerformed: { 
+                    pressedCancel = true
+                    dispose() 
+                })
             }
         }
     }
-
+    
+    // Show confirmation dialog when user presses "x" and modified the selection
+    multiSelectDialog.addWindowListener(new WindowAdapter() {
+        @Override
+        void windowClosing(WindowEvent e) {
+            def newSelection = checkBoxes.findAll { key, cb -> cb.selected }.collect { it.key }
+            if (!confirmChanges && !pressedCancel && !originalSelection.equals(newSelection)) {
+                int result = JOptionPane.showConfirmDialog(multiSelectDialog, "Selection changes will be lost. Do you wish to exit?", "Confirm Exit", JOptionPane.YES_NO_OPTION)
+                if (result == JOptionPane.YES_OPTION) {
+                    multiSelectDialog.dispose()
+                    return
+                }
+            } else {
+                multiSelectDialog.dispose()
+            }
+        }
+    })
+    
     multiSelectDialog.pack()
+    multiSelectDialog.setLocationRelativeTo(ui.frame)
     multiSelectDialog.visible = true
-
-    selectedItems = checkBoxes.findAll { key, cb -> cb.selected }.collect { it.key }
+    def selectedItems = confirmChanges ?  checkBoxes.findAll { key, cb -> cb.selected }.collect { it.key } : originalSelection
     return selectedItems
 }
 
